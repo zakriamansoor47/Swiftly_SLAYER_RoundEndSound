@@ -1,0 +1,8 @@
+{
+    "Chat.Prefix": "[gold][[darkred]★ [green]SLAYER RoundEndSound [darkred]★[gold]]",
+    "Chat.RES_Enabled": "[lime]Round end sound enabled.",
+    "Chat.RES_Disabled": "[red]Round end sound disabled.",
+    "Chat.RES_VolumeUsage": "[gold]Usage: [lime]!res_volume <0.0 - 1.0>. [gold]For Example: [lime]!res_vol 0.5 [lime]([gold]Current Volume: [green]{0}[lime])",
+    "Chat.RES_Volume": "[gold]Round end sound volume set to [lime]{0} ({1}%)",
+    "Chat.RES_PlayingSound": "[gold]Playing round end sound: [lime]{0}"
+}
