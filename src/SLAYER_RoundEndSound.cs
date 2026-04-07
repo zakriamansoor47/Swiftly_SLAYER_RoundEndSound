@@ -43,6 +43,7 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
     public static IAudioApi? _audioApi;
     Dictionary<IPlayer, PlayerSettings> PlayerOption = new Dictionary<IPlayer, PlayerSettings>();
     public int _currentSoundIndex = 0;
+    Random random = new Random();
 
     public override void UseSharedInterface(IInterfaceManager interfaceManager)
     {
@@ -132,7 +133,6 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
             RoundEndSounds soundToPlay;
             if (Config.RES_PlayInRandomOrder)
             {
-                var random = new Random();
                 soundToPlay = sounds[random.Next(sounds.Count)];
             }
             else
@@ -146,11 +146,11 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
                 Core.Logger.LogError($"[SLAYER_RoundEndSound] Sound file path is empty for sound '{soundToPlay.Name}'. Please check your configuration.");
                 return HookResult.Continue;
             }
-            else if (!File.Exists(Path.Combine(core.PluginDataDirectory, soundToPlay.FilePath)))
-            {
-                Core.Logger.LogError($"[SLAYER_RoundEndSound] Sound file not found: '{Path.Combine(core.PluginDataDirectory, soundToPlay.FilePath)}'. Please check your configuration.");
-                return HookResult.Continue;
-            }
+            // else if (!File.Exists(Path.Combine(core.PluginDataDirectory, soundToPlay.FilePath)))
+            // {
+            //     Core.Logger.LogError($"[SLAYER_RoundEndSound] Sound file not found: '{Path.Combine(core.PluginDataDirectory, soundToPlay.FilePath)}'. Please check your configuration.");
+            //     return HookResult.Continue;
+            // }
 
             foreach (var player in Core.PlayerManager.GetAllValidPlayers())
             {
@@ -160,9 +160,11 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
                 if (settings == null || !settings.enabled) continue;
 
                 PlayMP3SoundOnPlayer(player, soundToPlay.FilePath, settings.volume);
+
+                player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_PlayingSound", soundToPlay.Name]}");
                 if (Config.RES_EnableSoundNotification)
                 {
-                    player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_PlayingSound", soundToPlay.Name]}");
+                    player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_Notification"]}");
                 }
             }
             return HookResult.Continue;
