@@ -198,10 +198,19 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
 
                 if (!PlaySoundOnPlayer(player, soundToPlay.FilePath, settings.volume)) continue;
 
-                player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_PlayingSound", soundToPlay.Name]}");
+                string prefix = Localizer["Chat.Prefix"];
+                string playingMessage = Localizer["Chat.RES_PlayingSound", soundToPlay.Name];
+                foreach (string line in playingMessage.Split('\n'))
+                {
+                    player.SendChat($"{prefix} {line.TrimEnd('\r')}");
+                }
                 if (Config.RES_EnableSoundNotification)
                 {
-                    player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_Notification"]}");
+                    string notification = Localizer["Chat.RES_Notification"];
+                    foreach (string line in notification.Split('\n'))
+                    {
+                        player.SendChat($"{prefix} {line.TrimEnd('\r')}");
+                    }
                 }
             }
             return HookResult.Continue;
