@@ -9,6 +9,9 @@ using SwiftlyS2.Shared.Players;
 using SwiftlyS2.Shared.Plugins;
 using SwiftlyS2.Shared.Translation;
 using AudioApi;
+using SwiftlyS2.Shared.Events;
+using SwiftlyS2.Shared.Sounds;
+using SwiftlyS2.Shared.ProtobufDefinitions;
 
 namespace SLAYER_RoundEndSound;
 
@@ -16,6 +19,8 @@ namespace SLAYER_RoundEndSound;
 public class SLAYER_RoundEndSoundConfig
 {
     public string RES_DatabaseConnection { get; set; } = "default"; // name from database.jsonc
+    public bool RES_UseAudioPlugin { get; set; } = true;
+    public string RES_SoundEventFile { get; set; } = "";
     public bool RES_PlayInRandomOrder { get; set; } = true;
     public bool RES_EnableSoundNotification { get; set; } = true;
     public float RES_DefaultVolume { get; set; } = 1.0f;
@@ -28,10 +33,10 @@ public class RoundEndSounds
 }
 [PluginMetadata
 (
-    Id = "SLAYER_RoundEndSound", 
-    Version = "1.0", 
-    Name = "SLAYER_RoundEndSound", 
-    Author = "SLAYER", 
+    Id = "SLAYER_RoundEndSound",
+    Version = "1.1.0",
+    Name = "SLAYER_RoundEndSound",
+    Author = "SLAYER",
     Description = "Plays a sound at the end of each round"
 )]
 public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
@@ -41,24 +46,58 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
     private SLAYER_RoundEndSoundConfig Config { get; set; } = new();
     private ILocalizer Localizer => core.Localizer;
     public static IAudioApi? _audioApi;
-    Dictionary<IPlayer, PlayerSettings> PlayerOption = new Dictionary<IPlayer, PlayerSettings>();
+    private const string VolumeFeature = "SLAYER_RoundEndSound";
+    private Func<long, string, float>? _getEffectiveVolume;
+    private Action<string>? _unregisterVolumeFeature;
+    private readonly Dictionary<int, (ulong SteamId, uint Guid)> _addonSounds = new();
+    System.Collections.Concurrent.ConcurrentDictionary<IPlayer, PlayerSettings> PlayerOption = new();
     public int _currentSoundIndex = 0;
     Random random = new Random();
 
     public override void UseSharedInterface(IInterfaceManager interfaceManager)
     {
-        if (!interfaceManager.HasSharedInterface("audio"))
+        DisconnectVolumeApi();
+        _audioApi = null;
+        try
         {
-            Core.Logger.LogWarning("[SLAYER_RoundEndSound] Audio shared interface not found. Install/enable the 'Audio' plugin.");
-            _audioApi = null;
-            return;
+            if (Config.RES_UseAudioPlugin && interfaceManager.HasSharedInterface("audio"))
+                _audioApi = interfaceManager.GetSharedInterface<IAudioApi>("audio");
+        }
+        catch (Exception ex)
+        {
+            Core.Logger.LogError(ex, "[SLAYER_RoundEndSound] Audio API initialization failed.");
         }
 
-        var audioApi = interfaceManager.GetSharedInterface<IAudioApi>("audio");
-        _audioApi = audioApi;
+        // Resolve the optional contract only once. No reflection occurs during playback,
+        // and the plugin can start without Volume.API or Volume.Contract.dll installed.
+        if (interfaceManager.HasSharedInterface("Volume.Player.v1"))
+        {
+            try
+            {
+                var contract = Type.GetType("Volume.Contract.IPlayerVolumeAPI, Volume.Contract", throwOnError: true)!;
+                var getter = typeof(IInterfaceManager).GetMethod(nameof(IInterfaceManager.GetSharedInterface))!
+                    .MakeGenericMethod(contract);
+                var api = getter.Invoke(interfaceManager, new object[] { "Volume.Player.v1" })!;
+                var register = contract.GetMethod("RegisterFeature")!.CreateDelegate<Action<string, string>>(api);
+                var effective = contract.GetMethod("GetEffectiveVolume")!.CreateDelegate<Func<long, string, float>>(api);
+                var unregister = contract.GetMethod("UnregisterFeature")!.CreateDelegate<Action<string>>(api);
+                register(VolumeFeature, "Round End Sound");
+                _getEffectiveVolume = effective;
+                _unregisterVolumeFeature = unregister;
+            }
+            catch (Exception ex)
+            {
+                Core.Logger.LogError(ex, "[SLAYER_RoundEndSound] Volume API initialization failed; using RES volume settings.");
+            }
+        }
+
+        Core.Logger.LogInformation("[SLAYER_RoundEndSound] Playback mode: {Mode}. Volume API: {VolumeApi}",
+            _audioApi != null ? "Audio" : "Workshop addon", _getEffectiveVolume != null);
+        if (Config.RES_UseAudioPlugin && _audioApi == null)
+            Core.Logger.LogWarning("[SLAYER_RoundEndSound] Audio plugin unavailable. Addon fallback requires valid sound event names and RES_SoundEventFile.");
     }
 
-    public override void Load(bool hotReload) 
+    public override void Load(bool hotReload)
     {
         // Ensure static Core is initialized before any usage.
         // Swiftly injects the instance core via the primary constructor parameter `core`.
@@ -90,12 +129,14 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
             }
         }
 
+        Core.Event.OnPrecacheResource += OnPrecacheResource;
+
         // Events
         Core.GameEvent.HookPost<EventPlayerConnectFull>((@event) =>
         {
             var player = @event.UserIdPlayer;
             if(player == null || !player.IsValid) return HookResult.Continue;
-            
+
             LoadPlayerSettings(player);
             return HookResult.Continue;
         });
@@ -103,8 +144,9 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
         {
             var player = @event.UserIdPlayer;
             if(player == null || !player.IsValid) return HookResult.Continue;
-            
-            PlayerOption.Remove(player);
+
+            _addonSounds.Remove(player.PlayerID);
+            PlayerOption.TryRemove(player, out _);
             return HookResult.Continue;
         });
         Core.GameEvent.HookPre<EventRoundMvp>((@event) =>
@@ -117,12 +159,7 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
         });
         Core.GameEvent.HookPre<EventRoundStart>((@event) =>
         {
-            if (_audioApi == null) return HookResult.Continue;
-            var controller = _audioApi.UseChannel("slayer_roundendsound");
-            if (controller != null)
-            {
-                controller.StopAll();
-            }
+            StopSounds();
             return HookResult.Continue;
         });
         Core.GameEvent.HookPre<EventRoundEnd>((@event) =>
@@ -154,12 +191,12 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
 
             foreach (var player in Core.PlayerManager.GetAllValidPlayers())
             {
-                if(player == null || !player.IsValid) continue;
+                if(player == null || !player.IsValid || player.IsFakeClient) continue;
 
                 var settings = GetPlayerStats(player);
                 if (settings == null || !settings.enabled) continue;
 
-                PlayMP3SoundOnPlayer(player, soundToPlay.FilePath, settings.volume);
+                if (!PlaySoundOnPlayer(player, soundToPlay.FilePath, settings.volume)) continue;
 
                 player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_PlayingSound", soundToPlay.Name]}");
                 if (Config.RES_EnableSoundNotification)
@@ -171,30 +208,114 @@ public partial class SLAYER_RoundEndSound(ISwiftlyCore core) : BasePlugin(core)
         });
     }
 
-    private void PlayMP3SoundOnPlayer(IPlayer player, string soundPath, float volume = 1.0f)
+    private static float ClampVolume(float volume) => float.IsFinite(volume) ? Math.Clamp(volume, 0f, 1f) : 0f;
+
+    private float GetPlaybackVolume(IPlayer player, float localVolume)
     {
-        if(!player.IsValid)return;
+        // Audio playback uses only the plugin's own !res_vol setting.
+        if (_audioApi != null) return ClampVolume(localVolume);
 
-        if (_audioApi == null)
+        // Workshop playback uses only Volume API (!volume), never !res_vol.
+        if (_getEffectiveVolume == null) return 1f;
+        try
         {
-            Core.Logger.LogError($"[SLAYER_RoundEndSound] Audio API is not initialized. Cannot play sound for player {player.Name}");
-            return;
+            return ClampVolume(_getEffectiveVolume((long)player.SteamID, VolumeFeature));
         }
-        var controller = _audioApi.UseChannel("slayer_roundendsound");
-        if (controller == null)
+        catch (Exception ex)
         {
-            Core.Logger.LogError($"[SLAYER_RoundEndSound] Failed to get audio channel for player {player.Name}");
-            return;
+            Core.Logger.LogError(ex, "[SLAYER_RoundEndSound] Volume API failed; using default Workshop volume until reload.");
+            _getEffectiveVolume = null;
+            return 1f;
         }
-        IAudioSource source = _audioApi.DecodeFromFile(Path.Combine(core.PluginDataDirectory, soundPath));
-        controller.SetSource(source);
+    }
 
-        controller.SetVolume(player.PlayerID, volume);
-        controller.Play(player.PlayerID);
+    private bool PlaySoundOnPlayer(IPlayer player, string soundPath, float volume)
+    {
+        if (!player.IsValid || player.IsFakeClient) return false;
+        volume = GetPlaybackVolume(player, volume);
+        if (volume <= 0f) return false;
+        try
+        {
+            if (_audioApi != null)
+            {
+                var controller = _audioApi.UseChannel("slayer_roundendsound");
+                if (controller == null) return false;
+                IAudioSource source = _audioApi.DecodeFromFile(Path.Combine(core.PluginDataDirectory, soundPath));
+                controller.SetSource(source);
+                controller.SetVolume(player.PlayerID, volume);
+                controller.Play(player.PlayerID);
+            }
+            else
+            {
+                var name = soundPath.Trim();
+                if (name.EndsWith(".vsnd_c", StringComparison.OrdinalIgnoreCase)) name = name[..^7];
+                else if (name.EndsWith(".vsnd", StringComparison.OrdinalIgnoreCase)) name = name[..^5];
+                using var soundEvent = new SoundEvent
+                {
+                    Name = name,
+                    Volume = volume,
+                    SourceEntityIndex = player.Pawn == null ? -1 : (int)player.Pawn.Index
+                };
+                soundEvent.Recipients.AddRecipient(player.PlayerID);
+                _addonSounds[player.PlayerID] = (player.SteamID, soundEvent.Emit());
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Core.Logger.LogError(ex, "[SLAYER_RoundEndSound] Failed to play {Sound}", soundPath);
+            return false;
+        }
+    }
+
+    private void OnPrecacheResource(IOnPrecacheResourceEvent @event)
+    {
+        // Also precache when Audio is requested: its absence can select addon fallback.
+        if (!string.IsNullOrWhiteSpace(Config.RES_SoundEventFile))
+            @event.AddItem(Config.RES_SoundEventFile);
+    }
+
+    private void StopSounds()
+    {
+        try
+        {
+            _audioApi?.UseChannel("slayer_roundendsound")?.StopAll();
+            foreach (var player in Core.PlayerManager.GetAllValidPlayers())
+            {
+                if (player.IsFakeClient || !_addonSounds.TryGetValue(player.PlayerID, out var sound)
+                    || sound.SteamId != player.SteamID) continue;
+                using var message = Core.NetMessage.Create<CMsgSosStopSoundEvent>();
+                message.SoundeventGuid = unchecked((int)sound.Guid);
+                message.Recipients.AddRecipient(player.PlayerID);
+                message.Send();
+            }
+        }
+        catch (Exception ex)
+        {
+            Core.Logger.LogError(ex, "[SLAYER_RoundEndSound] Failed to stop round end sounds.");
+        }
+        finally
+        {
+            _addonSounds.Clear();
+        }
+    }
+
+    private void DisconnectVolumeApi()
+    {
+        try { _unregisterVolumeFeature?.Invoke(VolumeFeature); }
+        catch (Exception ex) { core.Logger.LogWarning(ex, "[SLAYER_RoundEndSound] Could not unregister Volume API feature."); }
+        _getEffectiveVolume = null;
+        _unregisterVolumeFeature = null;
     }
 
     public override void Unload()
     {
-    
+        StopSounds();
+        Core.Event.OnPrecacheResource -= OnPrecacheResource;
+        DisconnectVolumeApi();
+        _audioApi = null;
+        PlayerOption.Clear();
+        _provider?.Dispose();
+        _provider = null;
     }
-} 
+}

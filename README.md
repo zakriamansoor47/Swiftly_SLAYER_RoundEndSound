@@ -18,10 +18,11 @@ If you like this project, consider supporting me:
 
 
 ## Description:
-This plugin plays a Sound at every round end. Players can enable/disable RoundEndSound with `!res` command. And can change volume by `!res_vol <0.1 - 1.0>` command.
+This plugin plays a Sound at every round end. Players can enable/disable RoundEndSound with `!res` command. And can change volume by `!res_vol <0.1 - 1.0>` command, or with !volume, if you use it without Audio
 
 ## Required:
-**[Audio](https://github.com/SwiftlyS2-Plugins/Audio)** - To Use Sounds
+**[Volume](https://github.com/a2Labs-cc/Volume.API)** - To adjust the volume with !volume
+**[Audio](https://github.com/SwiftlyS2-Plugins/Audio)** - Optional, if you want to use the Swiftly Audio method
 
 ## Installation:
 **1.** Upload files to your server.
@@ -42,6 +43,8 @@ This plugin plays a Sound at every round end. Players can enable/disable RoundEn
 {
   "Main": {
     "RES_DatabaseConnection": "default",
+    "RES_UseAudioPlugin": false,
+    "RES_SoundEventFile": "path/your.vsndevts",
     "RES_PlayInRandomOrder": true,
     "RES_EnableSoundNotification": true,
     "RES_DefaultVolume": 1,

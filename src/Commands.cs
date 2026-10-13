@@ -17,14 +17,14 @@ public partial class SLAYER_RoundEndSound : BasePlugin
         {
             PlayerOption[player].enabled = false;
             player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_Disabled"]}");
-            Task.Run(async () => await UpdatePlayerSettingsAsync(PlayerOption[player]));
+            Task.Run(async () => await UpdatePlayerSettingsAsync(settings));
         }
         else
         {
             
             PlayerOption[player].enabled = true;
             player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_Enabled"]}");
-            Task.Run(async () => await UpdatePlayerSettingsAsync(PlayerOption[player]));
+            Task.Run(async () => await UpdatePlayerSettingsAsync(settings));
         }
     }
     [Command("res_volume")]
@@ -33,6 +33,13 @@ public partial class SLAYER_RoundEndSound : BasePlugin
 	{
         var player = command.Sender;
         if (player == null || !player.IsValid) return;
+
+        // !res_vol is only meaningful in Audio playback mode.
+        if (_audioApi == null)
+        {
+            player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_WorkshopVolume"]}");
+            return;
+        }
 
         var settings = GetPlayerStats(player);
         if (settings == null) return;
@@ -46,7 +53,7 @@ public partial class SLAYER_RoundEndSound : BasePlugin
 
             PlayerOption[player].volume = Math.Clamp(volume, 0.0f, 1.0f);
             player.SendChat($"{Localizer["Chat.Prefix"]} {Localizer["Chat.RES_Volume", PlayerOption[player].volume, PlayerOption[player].volume * 100]}");
-            Task.Run(async () => await UpdatePlayerSettingsAsync(PlayerOption[player]));
+            Task.Run(async () => await UpdatePlayerSettingsAsync(settings));
         }
         else
         {
